@@ -1,0 +1,454 @@
+import React, { useState, useEffect } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, onAuthStateChanged, signInAnonymously, signInWithCustomToken } from 'firebase/auth';
+import { 
+  getFirestore, 
+  collection, 
+  addDoc, 
+  onSnapshot, 
+  doc, 
+  updateDoc, 
+  deleteDoc, 
+  serverTimestamp,
+  initializeFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager
+} from 'firebase/firestore';
+import { 
+  ShoppingBag, 
+  Package, 
+  Settings, 
+  Trash2, 
+  X, 
+  Smartphone, 
+  Check,
+  Search,
+  ChevronRight,
+  Printer,
+  Type,
+  Palette,
+  Download
+} from 'lucide-react';
+
+// Firebase Config
+const firebaseConfig = JSON.parse(__firebase_config);
+const app = initializeApp(firebaseConfig);
+const db = initializeFirestore(app, {
+  localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() })
+});
+const auth = getAuth(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'simple-pos-001';
+
+const fontOptions = [
+  { name: 'Standard', family: 'system-ui, sans-serif' },
+  { name: 'Modern', family: "'Inter', sans-serif" },
+  { name: 'Myanmar', family: "'Pyidaungsu', serif" },
+  { name: 'Rounded', family: "'Quicksand', sans-serif" }
+];
+
+const colorOptions = [
+  { name: 'Blue', value: '#3b82f6' },
+  { name: 'Emerald', value: '#10b981' },
+  { name: 'Orange', value: '#f97316' },
+  { name: 'Rose', value: '#f43f5e' },
+  { name: 'Indigo', value: '#6366f1' },
+  { name: 'Violet', value: '#8b5cf6' },
+  { name: 'Amber', value: '#f59e0b' },
+  { name: 'Slate', value: '#475569' }
+];
+
+const fontSizeOptions = [
+  { name: 'Small', base: '0.875rem', scale: '0.75' },
+  { name: 'Medium', base: '1rem', scale: '1' },
+  { name: 'Large', base: '1.125rem', scale: '1.25' }
+];
+
+export default function App() {
+  const [user, setUser] = useState(null);
+  const [activeTab, setActiveTab] = useState('sales');
+  const [products, setProducts] = useState([]);
+  const [cart, setCart] = useState([]);
+  const [showReceipt, setShowReceipt] = useState(null);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [installPrompt, setInstallPrompt] = useState(null);
+  
+  // Theme & Customization State
+  const [themeColor, setThemeColor] = useState(colorOptions[0]);
+  const [themeFont, setThemeFont] = useState(fontOptions[0]);
+  const [fontSize, setFontSize] = useState(fontSizeOptions[1]);
+
+  useEffect(() => {
+    const initAuth = async () => {
+      if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+        await signInWithCustomToken(auth, __initial_auth_token);
+      } else {
+        await signInAnonymously(auth);
+      }
+    };
+    initAuth();
+    const unsubscribe = onAuthStateChanged(auth, setUser);
+
+    // PWA Install Prompt Listener
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      setInstallPrompt(e);
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!user) return;
+    const unsub = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'products'), (snaps) => {
+      setProducts(snaps.docs.map(d => ({ id: d.id, ...d.data() })));
+    }, (error) => console.error("Firestore Error:", error));
+    return () => unsub();
+  }, [user]);
+
+  const addToCart = (p) => {
+    const exist = cart.find(item => item.id === p.id);
+    if (p.stock > (exist?.qty || 0)) {
+      if (exist) setCart(cart.map(i => i.id === p.id ? {...i, qty: i.qty + 1} : i));
+      else setCart([...cart, {...p, qty: 1}]);
+    }
+  };
+
+  const handleCheckout = async () => {
+    if (cart.length === 0) return;
+    const total = cart.reduce((s, i) => s + (i.price * i.qty), 0);
+    const sale = { 
+      items: cart.map(i => ({ name: i.name, price: i.price, qty: i.qty })), 
+      total, 
+      time: new Date().toISOString() 
+    };
+    
+    try {
+      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'sales'), { ...sale, timestamp: serverTimestamp() });
+      // Update stock for each product
+      for (const item of cart) {
+        const prodRef = doc(db, 'artifacts', appId, 'public', 'data', 'products', item.id);
+        await updateDoc(prodRef, { stock: item.stock - item.qty });
+      }
+      setShowReceipt(sale);
+      setCart([]);
+    } catch (e) {
+      console.error("Sale Error:", e);
+    }
+  };
+
+  const handleInstall = async () => {
+    if (!installPrompt) return;
+    installPrompt.prompt();
+    const { outcome } = await installPrompt.userChoice;
+    if (outcome === 'accepted') setInstallPrompt(null);
+  };
+
+  if (!user) return <div className="h-screen flex items-center justify-center font-bold">စနစ်ကို ချိတ်ဆက်နေပါသည်...</div>;
+
+  return (
+    <div className="h-screen flex flex-col bg-gray-50 text-gray-900 overflow-hidden" style={{ fontFamily: themeFont.family, fontSize: fontSize.base }}>
+      <style>{`
+        :root { --main: ${themeColor.value}; }
+        .bg-main { background-color: var(--main); }
+        .text-main { color: var(--main); }
+        .border-main { border-color: var(--main); }
+        .ring-main { --tw-ring-color: var(--main); }
+        /* PWA specific styling for safe areas on iOS */
+        body { padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); }
+      `}</style>
+
+      {/* Header */}
+      <header className="bg-white px-6 py-4 shadow-sm flex justify-between items-center z-10 border-b border-gray-100">
+        <div className="flex items-center gap-2">
+          <div className="w-8 h-8 bg-main rounded-lg flex items-center justify-center text-white shadow-sm">
+            <ShoppingBag size={18} />
+          </div>
+          <h1 className="text-xl font-black text-main tracking-tight hidden sm:block">POS App</h1>
+        </div>
+        
+        <div className="flex items-center gap-3">
+          <div className="relative w-32 sm:w-64">
+            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+            <input 
+              className="w-full bg-gray-100 rounded-full py-2 pl-9 pr-4 text-sm outline-none focus:ring-2 ring-main/20 border-transparent focus:border-main/20"
+              placeholder="ရှာရန်..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+            />
+          </div>
+          {installPrompt && (
+            <button onClick={handleInstall} className="p-2 bg-main/10 text-main rounded-full hover:bg-main/20 transition-colors">
+              <Download size={20} />
+            </button>
+          )}
+        </div>
+      </header>
+
+      {/* Main Content */}
+      <main className="flex-1 overflow-y-auto p-4 pb-40 lg:pb-24">
+        {activeTab === 'sales' && (
+          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
+            {products.filter(p => p.name.toLowerCase().includes(searchTerm.toLowerCase())).map(p => (
+              <button 
+                key={p.id}
+                onClick={() => addToCart(p)}
+                className="bg-white p-5 rounded-[2rem] shadow-sm hover:shadow-xl transition-all text-left border-2 border-transparent active:border-main active:scale-95 flex flex-col items-center sm:items-start group"
+              >
+                <div className="w-full aspect-square bg-gray-50 rounded-2xl flex items-center justify-center text-gray-300 group-hover:bg-main/5 group-hover:text-main transition-colors mb-4">
+                  <Smartphone size={32} />
+                </div>
+                <p className="font-bold text-sm truncate w-full mb-1">{p.name}</p>
+                <p className="text-main font-black text-base">{p.price.toLocaleString()} Ks</p>
+                <p className={`text-[10px] font-bold uppercase mt-2 px-2 py-0.5 rounded-full ${p.stock < 5 ? 'bg-red-100 text-red-500' : 'bg-gray-100 text-gray-400'}`}>
+                  လက်ကျန်: {p.stock}
+                </p>
+              </button>
+            ))}
+            {products.length === 0 && (
+              <div className="col-span-full py-20 text-center text-gray-400">
+                <Package size={48} className="mx-auto mb-4 opacity-20" />
+                <p className="font-bold">ပစ္စည်းစာရင်း မရှိသေးပါ</p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {activeTab === 'inventory' && (
+          <div className="max-w-xl mx-auto space-y-4">
+             <div className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-gray-100">
+                <h2 className="font-black text-lg mb-6 flex items-center gap-2 text-main">
+                  <Package size={20}/> ပစ္စည်းစာရင်း စီမံခန့်ခွဲမှု
+                </h2>
+                <div className="grid grid-cols-1 gap-4">
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black uppercase text-gray-400 ml-2">Product Name</label>
+                    <input className="w-full p-4 bg-gray-50 rounded-2xl outline-none focus:ring-2 ring-main/10 border-transparent focus:border-main/20" placeholder="ဥပမာ- iPhone 15" id="p-name" />
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black uppercase text-gray-400 ml-2">Price (Ks)</label>
+                      <input className="w-full p-4 bg-gray-50 rounded-2xl outline-none focus:ring-2 ring-main/10 border-transparent focus:border-main/20" placeholder="0" type="number" id="p-price" />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black uppercase text-gray-400 ml-2">Stock Qty</label>
+                      <input className="w-full p-4 bg-gray-50 rounded-2xl outline-none focus:ring-2 ring-main/10 border-transparent focus:border-main/20" placeholder="0" type="number" id="p-stock" />
+                    </div>
+                  </div>
+                  <button 
+                    onClick={async () => {
+                      const n = document.getElementById('p-name').value;
+                      const p = document.getElementById('p-price').value;
+                      const s = document.getElementById('p-stock').value;
+                      if(n && p && s) {
+                        await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'products'), { name: n, price: Number(p), stock: Number(s), createdAt: serverTimestamp() });
+                        document.getElementById('p-name').value = '';
+                        document.getElementById('p-price').value = '';
+                        document.getElementById('p-stock').value = '';
+                      }
+                    }}
+                    className="w-full bg-main text-white py-5 rounded-2xl font-black shadow-lg shadow-main/20 active:scale-95 transition-all mt-2"
+                  >
+                    ပစ္စည်းအသစ် သိမ်းဆည်းမည်
+                  </button>
+                </div>
+             </div>
+             
+             <div className="bg-white rounded-[2.5rem] shadow-sm overflow-hidden border border-gray-100">
+                {products.map(p => (
+                  <div key={p.id} className="p-5 flex justify-between items-center border-b last:border-0 hover:bg-gray-50 transition-colors">
+                    <div className="flex items-center gap-4">
+                      <div className="w-12 h-12 bg-gray-100 rounded-2xl flex items-center justify-center text-gray-400 group-hover:text-main">
+                        <Smartphone size={20} />
+                      </div>
+                      <div>
+                        <p className="font-bold text-sm">{p.name}</p>
+                        <p className="text-xs text-gray-400 font-bold">{p.price.toLocaleString()} Ks • လက်ကျန် {p.stock} ခု</p>
+                      </div>
+                    </div>
+                    <button onClick={() => deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'products', p.id))} className="text-red-400 p-3 hover:bg-red-50 rounded-2xl transition-all">
+                      <Trash2 size={18} />
+                    </button>
+                  </div>
+                ))}
+             </div>
+          </div>
+        )}
+
+        {activeTab === 'settings' && (
+          <div className="max-w-xl mx-auto space-y-6 pb-12">
+            <section className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-gray-100">
+              <div className="flex items-center gap-3 mb-8">
+                <div className="p-3 bg-main/10 text-main rounded-2xl"><Palette size={20}/></div>
+                <div>
+                  <h3 className="font-black text-sm uppercase tracking-widest">ပင်မအရောင် (UI Color)</h3>
+                  <p className="text-[10px] text-gray-400 font-bold uppercase">Brand Identity Settings</p>
+                </div>
+              </div>
+              <div className="grid grid-cols-4 sm:grid-cols-8 gap-4">
+                {colorOptions.map(c => (
+                  <button 
+                    key={c.name} 
+                    onClick={() => setThemeColor(c)}
+                    className={`h-10 rounded-xl flex items-center justify-center text-white transition-all ${themeColor.name === c.name ? 'ring-4 ring-offset-2 ring-main scale-110 shadow-lg' : 'hover:scale-105 opacity-80'}`}
+                    style={{ backgroundColor: c.value }}
+                  >
+                    {themeColor.name === c.name && <Check size={18} />}
+                  </button>
+                ))}
+              </div>
+              <div className="mt-8 flex items-center gap-4 p-5 bg-gray-50 rounded-[1.5rem] border border-gray-100">
+                <div className="relative">
+                  <input 
+                    type="color" 
+                    value={themeColor.value} 
+                    onChange={(e) => setThemeColor({ name: 'Custom', value: e.target.value })}
+                    className="w-12 h-12 rounded-xl cursor-pointer border-4 border-white shadow-sm appearance-none bg-transparent"
+                  />
+                </div>
+                <div>
+                  <p className="text-xs font-black uppercase text-gray-800">Custom Color Picker</p>
+                  <p className="text-[10px] font-bold text-gray-400 uppercase">ကိုယ်ပိုင်အရောင် ရွေးချယ်ရန်</p>
+                </div>
+              </div>
+            </section>
+            
+            <section className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-gray-100">
+              <div className="flex items-center gap-3 mb-8">
+                <div className="p-3 bg-main/10 text-main rounded-2xl"><Type size={20}/></div>
+                <div>
+                  <h3 className="font-black text-sm uppercase tracking-widest">စာသားနှင့် ဒီဇိုင်း (UX Settings)</h3>
+                  <p className="text-[10px] text-gray-400 font-bold uppercase">Typography & Size</p>
+                </div>
+              </div>
+              
+              <div className="space-y-8">
+                <div>
+                  <p className="text-[10px] font-black text-gray-400 uppercase mb-4 px-1 tracking-widest">Font Family</p>
+                  <div className="grid grid-cols-2 gap-3">
+                    {fontOptions.map(f => (
+                      <button 
+                        key={f.name}
+                        onClick={() => setThemeFont(f)}
+                        className={`p-5 rounded-2xl border-2 text-sm font-black transition-all ${themeFont.name === f.name ? 'border-main bg-main/5 text-main shadow-sm' : 'bg-white border-gray-50 hover:bg-gray-100 hover:border-gray-200'}`}
+                        style={{ fontFamily: f.family }}
+                      >
+                        {f.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <p className="text-[10px] font-black text-gray-400 uppercase mb-4 px-1 tracking-widest">Text Size</p>
+                  <div className="flex bg-gray-100/50 p-2 rounded-[1.5rem] border border-gray-100">
+                    {fontSizeOptions.map(sz => (
+                      <button 
+                        key={sz.name}
+                        onClick={() => setFontSize(sz)}
+                        className={`flex-1 py-4 rounded-xl text-xs font-black transition-all ${fontSize.name === sz.name ? 'bg-white shadow-md text-main' : 'text-gray-400 hover:text-gray-600'}`}
+                      >
+                        {sz.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </section>
+          </div>
+        )}
+      </main>
+
+      {/* Floating Cart Bar (Mobile/Tablet Only) */}
+      {cart.length > 0 && activeTab === 'sales' && (
+        <div className="fixed bottom-28 left-4 right-4 bg-white/90 backdrop-blur-2xl shadow-[0_20px_50px_rgba(0,0,0,0.1)] rounded-[2.5rem] border border-white/50 p-6 flex flex-col gap-4 animate-in slide-in-from-bottom-8 duration-500 z-40">
+          <div className="flex justify-between items-center px-2">
+            <div>
+              <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">စုစုပေါင်း ကျသင့်ငွေ</p>
+              <p className="font-black text-2xl text-main tracking-tight">{cart.reduce((s,i)=>s+(i.price*i.qty),0).toLocaleString()} <span className="text-xs">Ks</span></p>
+            </div>
+            <div className="bg-main text-white px-5 py-2.5 rounded-full font-black text-[10px] uppercase tracking-widest shadow-lg shadow-main/20">
+              {cart.length} ခု
+            </div>
+          </div>
+          <button 
+            onClick={handleCheckout}
+            className="w-full bg-main text-white py-5 rounded-[1.8rem] font-black flex items-center justify-center gap-3 shadow-2xl shadow-main/30 active:scale-95 transition-all text-sm uppercase tracking-widest"
+          >
+            ငွေရှင်းမည် <ChevronRight size={20} strokeWidth={3} />
+          </button>
+        </div>
+      )}
+
+      {/* Desktop Bottom Info Bar */}
+      <div className="hidden lg:flex fixed bottom-0 left-0 right-0 bg-white border-t border-gray-100 px-8 py-3 justify-between items-center text-[10px] font-bold text-gray-400 uppercase z-30">
+        <div className="flex gap-6">
+          <span>Version: 2.0 (PWA Ready)</span>
+          <span>Status: Online</span>
+        </div>
+        <div>
+          User ID: {user.uid.substring(0, 12)}...
+        </div>
+      </div>
+
+      {/* Navigation (Sticky Bottom) */}
+      <nav className="fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-lg border-t border-gray-100 flex justify-around p-3 pb-8 lg:pb-3 z-50">
+        {[
+          { id: 'sales', icon: ShoppingBag, label: 'အရောင်း' },
+          { id: 'inventory', icon: Package, label: 'ပစ္စည်းစာရင်း' },
+          { id: 'settings', icon: Settings, label: 'ဆက်တင်' }
+        ].map(item => (
+          <button 
+            key={item.id}
+            onClick={() => setActiveTab(item.id)}
+            className={`flex flex-col items-center gap-1 transition-all px-8 py-2.5 rounded-2xl ${activeTab === item.id ? 'bg-main text-white scale-105 shadow-xl shadow-main/20' : 'text-gray-400 hover:text-main hover:bg-main/5'}`}
+          >
+            <item.icon size={22} strokeWidth={activeTab === item.id ? 3 : 2} />
+            <span className="text-[10px] font-black uppercase tracking-tighter hidden sm:block">{item.label}</span>
+          </button>
+        ))}
+      </nav>
+
+      {/* Receipt View (Modern Modal) */}
+      {showReceipt && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-md flex items-end md:items-center justify-center z-[100] p-4">
+          <div className="bg-white w-full max-w-md rounded-t-[3.5rem] md:rounded-[3rem] p-10 shadow-2xl animate-in slide-in-from-bottom duration-500 overflow-hidden relative">
+            <div className="absolute top-0 left-0 w-full h-2 bg-main opacity-20"></div>
+            <div className="flex justify-between items-start mb-10">
+               <div className="p-4 bg-main/10 text-main rounded-[1.5rem]"><ShoppingBag size={28}/></div>
+               <button onClick={() => setShowReceipt(null)} className="p-3 bg-gray-50 rounded-full text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition-colors"><X size={20}/></button>
+            </div>
+            
+            <h2 className="font-black text-3xl mb-1 text-center tracking-tight">ကျေးဇူးတင်ပါသည်</h2>
+            <p className="text-[10px] text-gray-400 text-center font-black mb-10 uppercase tracking-[0.3em]">အရောင်းပြေစာ / VOUCHER</p>
+
+            <div className="space-y-5 mb-10 border-y border-dashed border-gray-200 py-10">
+              {showReceipt.items.map((i, idx) => (
+                <div key={idx} className="flex justify-between text-sm items-center">
+                  <div className="flex flex-col">
+                    <span className="font-black text-gray-800">{i.name}</span>
+                    <span className="text-[10px] text-gray-400 font-bold uppercase">{i.qty} ခု x {i.price.toLocaleString()} Ks</span>
+                  </div>
+                  <span className="font-black text-gray-900">{(i.price * i.qty).toLocaleString()}</span>
+                </div>
+              ))}
+              <div className="pt-6 mt-2 flex justify-between font-black text-3xl text-main border-t border-gray-100">
+                <span className="text-sm self-center text-gray-400">စုစုပေါင်း</span>
+                <span>{showReceipt.total.toLocaleString()} <span className="text-xs">Ks</span></span>
+              </div>
+            </div>
+            
+            <div className="flex gap-4">
+              <button className="flex-2 bg-gray-900 text-white py-5 rounded-[1.5rem] font-black text-xs flex items-center justify-center gap-3 shadow-xl active:scale-95 transition-all flex-grow">
+                <Printer size={20} strokeWidth={2.5} /> PRINT RECEIPT
+              </button>
+              <button onClick={() => setShowReceipt(null)} className="flex-1 bg-gray-100 text-gray-600 py-5 rounded-[1.5rem] font-black text-xs active:scale-95 transition-all">
+                DONE
+              </button>
+            </div>
+            <p className="text-[8px] text-gray-300 font-bold text-center mt-6 uppercase tracking-widest">Powerd by Simple POS System</p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
